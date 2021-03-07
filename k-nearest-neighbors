@@ -1,0 +1,148 @@
+import nltk
+from nltk.stem.snowball import SnowballStemmer
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity as cs
+from collections import Counter
+import re
+
+nltk.download("stopwords")
+
+def handle_data(filename): #this method is to format the train data into a list of list of words thats been stemmed
+    stemmer = SnowballStemmer("english")
+    content_stemmed = []    
+    stop_words=set(stopwords.words('english'))
+    stop_words.update(('althought','day','ago','k','the','i', 'get','got','there','br','well', 'watch', 'get'))
+    with open(filename,"r", encoding= 'utf-8-sig') as data:
+        for lines in data.readlines():                  #reads individual review of file
+            lines.strip()                               #removes end spaces
+            lines = re.sub('[^A-Za-z]+', ' ', lines)    #removes special characters and replace with space
+            lines = lines.lower()                       #makes all words lower case
+            lines_split = lines.split()                 #tokenize each line 
+            lines_filtered = [w for w in lines_split if not w in stop_words] #filter out unnecessary words
+            lines_stemmed = [stemmer.stem(words) for words in lines_filtered] #stem words into its word stem
+            content_stemmed.append(lines_stemmed)       
+    return content_stemmed
+    
+def get_scores(filename):                       #returns scores as a list
+    scores = []
+    with open(filename, "r", encoding='utf-8-sig') as data:
+        for lines in data.readlines():
+            split_review = re.split('\t',lines) #splits the score and the review into two parts
+            scores.append(split_review[0])
+    return scores                               
+
+def create_dictionary(training_set):                        #create dictionary from training data
+    text_dictionary = dict()
+    for i in range(len(training_set)):
+        for j in range(len(training_set[i])):
+            if training_set[i][j] in text_dictionary:
+               text_dictionary.update({training_set[i][j] : text_dictionary.get(training_set[i][j]) + 1}) #keeps track of total frequency of the word where value represents the frequency
+            else:
+                text_dictionary.update({training_set[i][j] : 1}) #if not found, add to dictionary and set value as 1 which indicates the freq
+    better_dictionary = dict()
+    #get_most_common_word(text_dictionary, 100)
+    count = 0
+    for i in text_dictionary:
+        if text_dictionary.get(i) > 3: #this creates a new dictionary with words that occur atleast more than twice
+            better_dictionary.update({i:count})
+            count+=1    
+    return better_dictionary
+
+def get_tfidf(data,text_dictionary): #method that makes a vector with tfidf values using our optimized dictionary and training_set
+    vectorizer = TfidfVectorizer(vocabulary=text_dictionary)
+    data_modified = convert_to_1d(data)
+    tfidf_vectors = vectorizer.fit_transform(data_modified) #returns tfidf from data used
+    return tfidf_vectors
+
+def knn(matrixtest, matrixtrain, list_of_results,k): #list_of_results keeps track of score
+    cs_distances = cs(matrixtest,matrixtrain)        #computes the cosine similarity of test matrix and train matrix
+    scores = get_scores("traindata.txt")
+    for array_of_distances in cs_distances:      
+        top_k_values= array_of_distances.argsort()[-k:] #creates an array of the top k cosine similarity values for the given index
+        list_of_results.append(get_predicted_score(top_k_values,scores)) #each score gets added to list of results
+    return list_of_results
+
+def get_predicted_score(cs_array, scores): #cs_array is an array of list of closest neighbors
+    predicted_score = 0
+    for i in cs_array:                            #i represents index of the closest neighbor, and gets the proper score
+        predicted_score += int(scores[i])         #adds +1 or -1 depending on the neighbor
+    return "1" if predicted_score > 0 else "-1"   #if predicted score is larger than 1, that means there was more positive scores, and if its less than 1 there were more positive scores
+
+def convert_to_1d(data_set): #converts the 2d array of modified documents into a 1 d array with each element a review
+     data_1d = []
+     for i in range(len(data_set)):      #in order to use fit_transform, the training_set needs to be a 1D array of strings, 
+        data_1d.append(" ".join(data_set[i])) #1D array of strings is being made from training_set
+     return data_1d
+    
+def cross_validation(data_set, k):              #cross validate training tests
+    
+    print("k is equal to: " + str(k))
+    practice_size = 1499                        #how large each test set will be
+    index_one = 0
+    index_two = practice_size                  
+    percentage = 0
+    correct = 0
+    for i in range(10):
+        practice_set= data_set[index_one:index_two]          #separating the data set to make a test set 
+        training_set = data_set[0:index_one] + data_set[index_two:]          #retrieving the rest of the data set to make a training set
+        dictionary = create_dictionary(training_set)
+        practice_matrix = get_tfidf(practice_set,dictionary)
+        training_matrix = get_tfidf(training_set,dictionary)
+        result_scores = []
+        custom_knn(practice_matrix, training_matrix, result_scores, k,index_one,index_two)
+        actual_scores = get_scores("traindata.txt")
+        for f in range(practice_size):
+            if actual_scores[f+index_one] == result_scores[f]:       #if test scores match with actual scores
+                correct += 1
+        percentage += correct/practice_size
+        index_one+= practice_size
+        index_two+= practice_size  
+        print("Iteration " + str(i) + " " + str(correct/practice_size)) 
+        correct = 0
+    f = open("results", "w")
+    for score in result_scores:
+        f.write(score + "\n")
+    f.close()
+    print("Percentage correct: " + str(percentage/10))
+
+def get_most_common_word(my_dict, n):                   #returns the n most common words found in text
+    counter = Counter(my_dict) 
+    most_common_words = counter.most_common(n)    
+    for i in most_common_words: 
+        print(i[0]," :",i[1]," ") 
+
+def get_custom_scores(filename, index_one, index_two):     #returns a custom score list for cross_val, where it will exclude the test data
+    scores = []
+    count = 0
+    with open(filename, "r", encoding='utf-8-sig') as data:
+        for lines in data.readlines():
+            if count >= index_one and count < index_two:
+                count +=1
+                continue
+            count += 1
+            split_review = re.split('\t',lines)
+            scores.append(split_review[0])
+    return scores
+    
+def custom_knn(matrixtest, matrixtrain, list_of_results,k,index_one,index_two): #custom knn for cross-val functionality 
+    cs_distances = cs(matrixtest,matrixtrain)        
+    scores = get_custom_scores("traindata.txt", index_one,index_two)  
+    for array_of_distances in cs_distances: 
+        top_k_values= array_of_distances.argsort()[-k:] 
+        list_of_results.append(get_predicted_score(top_k_values, scores)) 
+    return list_of_results 
+
+result_scores = []
+training_set = handle_data("traindata.txt")
+#cross_validation(training_set, 175)
+test_set = handle_data("testdata.txt")       
+dictionary = create_dictionary(training_set)
+trainingmatrix = get_tfidf(training_set,dictionary)
+testmatrix = get_tfidf(test_set, dictionary)
+knn(testmatrix,trainingmatrix, result_scores, 175)
+
+f = open("results", "w")
+for score in result_scores:
+        f.write(score + "\n")
+f.close()
